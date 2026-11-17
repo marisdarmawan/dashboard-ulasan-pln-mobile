@@ -1445,7 +1445,7 @@ st.markdown(
     """
 <div class="main-header">
     <h1>Dashboard Klasifikasi Ulasan Negatif PLN Mobile</h1>
-    <p>Monitoring Kualitas Layanan Digital, Stabilitas Versi Aplikasi, dan Kinerja SLA tim Contact Center 123. Dibuat oleh Tim Beyond Kwh Divisi Manajemen Digital (DIV MDG)</p>
+    <p>Monitoring Kualitas Layanan Digital, Stabilitas Versi Aplikasi, dan Kinerja SLA tim Contact Center 123. Data Ulasan Negatif Bersumber dari Ulasan Pelanggan PLN Mobile di Google Playstore</p>
 </div>
 """,
     unsafe_allow_html=True,
