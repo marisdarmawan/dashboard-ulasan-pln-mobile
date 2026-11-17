@@ -1512,9 +1512,9 @@ color_palette = {
 # 6. TABS DASHBOARD MANAJEMEN
 # ==========================================
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Ringkasan Eksekutif (Format Laporan)",
-    "📈 Tren Waktu (Bulanan 2026 & Tahunan)",
-    "🔍 Korelasi Versi & Kata Kunci",
+    "📊 Klasifikasi Ulasan Negatif",
+    "📈 Tren Waktu (Bulanan & Tahunan)",
+    "🔍 Versi Aplikasi & Kata Kunci (Topik)",
     "⏱️ Kinerja Waktu Tanggap CS",
     "📥 Unduh Laporan PDF & Data",
 ])
@@ -1522,7 +1522,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
   col_t1_l, col_t1_r = st.columns(2)
   with col_t1_l:
-    st.subheader("Grafik 1: Persentase Klasifikasi Utama")
+    st.subheader("Grafik 1: Klasifikasi Ulasan Negatif")
     df_pie_m = df_filtered["Klasifikasi Utama"].value_counts().reset_index()
     df_pie_m.columns = ["Kategori", "Jumlah"]
     fig1 = go.Figure(
@@ -1828,7 +1828,7 @@ with tab2:
 with tab3:
   ct3_l, ct3_r = st.columns(2)
   with ct3_l:
-    st.subheader("Grafik 7: Top 10 Kata Pemicu (Bersih Non-Keyword)")
+    st.subheader("Grafik 7: Top 10 Topik Ulasan Negatif")
     df_kw = (
         df_filtered["Kata_Pemicu_Clean"]
         .dropna()
@@ -1872,7 +1872,7 @@ with tab3:
     )
     st.plotly_chart(fig8, use_container_width=True)
 
-  st.subheader("Grafik 9: Heatmap Korelasi Versi vs Subklasifikasi")
+  st.subheader("Grafik 9: Heatmap Versi Aplikasi dan Klasifikasi")
   top_subs = (
       df_filtered[
           df_filtered["Klasifikasi Utama"].isin(
