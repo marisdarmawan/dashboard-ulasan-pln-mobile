@@ -1,4 +1,5 @@
 import io
+import sys
 import os
 import textwrap
 import re
@@ -168,7 +169,7 @@ def load_data(file_source):
 
 
 # ==========================================
-# 3. GENERATOR LAPORAN RESMI (PDF LENGKAP)
+# 3. GENERATOR LAPORAN RESMI (PDF DINAMIS)
 # ==========================================
 def generate_full_pdf_report(df_source):
   pdf_buffer = io.BytesIO()
@@ -183,7 +184,6 @@ def generate_full_pdf_report(df_source):
 
   styles = getSampleStyleSheet()
 
-  # Tipografi Laporan Eksekutif
   title_style = ParagraphStyle(
       "DocTitle",
       parent=styles["Heading1"],
@@ -227,7 +227,6 @@ def generate_full_pdf_report(df_source):
       textColor=colors.HexColor("#2C3E50"),
   )
 
-  # Helper untuk konversi chart matplotlib ke Flowable ReportLab (Bebas Cut-off)
   def make_clean_image(fig, w=525, h=215):
     buf = io.BytesIO()
     plt.savefig(
@@ -237,8 +236,56 @@ def generate_full_pdf_report(df_source):
     buf.seek(0)
     return RLImage(buf, width=w, height=h)
 
+  bulan_full_id = {
+      "01": "Januari",
+      "02": "Februari",
+      "03": "Maret",
+      "04": "April",
+      "05": "Mei",
+      "06": "Juni",
+      "07": "Juli",
+      "08": "Agustus",
+      "09": "September",
+      "10": "Oktober",
+      "11": "November",
+      "12": "Desember",
+  }
+  bulan_short_pdf = {
+      "01": "Jan",
+      "02": "Feb",
+      "03": "Mar",
+      "04": "Apr",
+      "05": "Mei",
+      "06": "Jun",
+      "07": "Jul",
+      "08": "Agu",
+      "09": "Sep",
+      "10": "Okt",
+      "11": "Nov",
+      "12": "Des",
+  }
+
+  def format_periode_id(bt, short=False):
+    parts = str(bt).split("-")
+    mapping = bulan_short_pdf if short else bulan_full_id
+    if len(parts) == 2 and parts[1] in mapping:
+      return f"{mapping[parts[1]]} {parts[0]}"
+    return str(bt)
+
   story = []
   tot = len(df_source)
+
+  valid_years = (
+      sorted(df_source["Tahun"].dropna().astype(int).unique())
+      if "Tahun" in df_source.columns
+      else []
+  )
+  if len(valid_years) > 1:
+    periode_header = f"Tahun {valid_years[0]} - {valid_years[-1]}"
+  elif len(valid_years) == 1:
+    periode_header = f"Tahun {valid_years[0]}"
+  else:
+    periode_header = "Periode Aktif"
 
   # ========================================================
   # HALAMAN 1: COVER RESMI, 5 METRICS KPI & DEFINISI INDIKATOR
@@ -261,7 +308,7 @@ def generate_full_pdf_report(df_source):
   story.append(
       Paragraph(
           "Evaluasi Komprehensif: 5 Metrik Kinerja, 11 Visualisasi Data, dan"
-          " Rekomendasi Strategis | Tahun 2026",
+          f" Rekomendasi Strategis | {periode_header}",
           subtitle_style,
       )
   )
@@ -276,18 +323,26 @@ def generate_full_pdf_report(df_source):
       )
   )
 
-  app_cnt = (df_source["Klasifikasi Utama"] == "Kendala Aplikasi").sum()
-  biz_cnt = (df_source["Klasifikasi Utama"] == "Kendala Proses Bisnis").sum()
-  has_reply = (
-      df_source["replyContent"].notna()
-      & (df_source["replyContent"].str.strip() != "")
-  ).sum()
-  reply_rate = (has_reply / tot * 100) if tot > 0 else 0
-  median_sla = (
+  app_cnt = int((df_source["Klasifikasi Utama"] == "Kendala Aplikasi").sum())
+  biz_cnt = int(
+      (df_source["Klasifikasi Utama"] == "Kendala Proses Bisnis").sum()
+  )
+  app_pct = (app_cnt / tot * 100) if tot > 0 else 0.0
+  biz_pct = (biz_cnt / tot * 100) if tot > 0 else 0.0
+
+  has_reply = int(
+      (
+          df_source["replyContent"].notna()
+          & (df_source["replyContent"].astype(str).str.strip() != "")
+      ).sum()
+  )
+  reply_rate = (has_reply / tot * 100) if tot > 0 else 0.0
+  median_sla_raw = (
       df_source["Response_Hours"].dropna().median()
       if "Response_Hours" in df_source.columns
-      else 0.7
+      else np.nan
   )
+  median_sla = 0.0 if pd.isna(median_sla_raw) else float(median_sla_raw)
 
   kpi_table_data = [[
       Paragraph(
@@ -295,11 +350,11 @@ def generate_full_pdf_report(df_source):
           body_style,
       ),
       Paragraph(
-          f"<b>Kendala Aplikasi</b><br/><font size=14 color='#C0392B'><b>{app_cnt:,}</b></font><br/><font size=7 color='#C0392B'>Porsi: {app_cnt/tot*100:.1f}%</font>",
+          f"<b>Kendala Aplikasi</b><br/><font size=14 color='#C0392B'><b>{app_cnt:,}</b></font><br/><font size=7 color='#C0392B'>Porsi: {app_pct:.1f}%</font>",
           body_style,
       ),
       Paragraph(
-          f"<b>Kendala Bisnis</b><br/><font size=14 color='#C0392B'><b>{biz_cnt:,}</b></font><br/><font size=7 color='#C0392B'>Porsi: {biz_cnt/tot*100:.1f}%</font>",
+          f"<b>Kendala Bisnis</b><br/><font size=14 color='#C0392B'><b>{biz_cnt:,}</b></font><br/><font size=7 color='#C0392B'>Porsi: {biz_pct:.1f}%</font>",
           body_style,
       ),
       Paragraph(
@@ -335,24 +390,21 @@ def generate_full_pdf_report(df_source):
           "Untuk mempermudah pembacaan laporan eksekutif manajemen, arti"
           " indikator pada 5 metrik KPI di atas adalah sebagai berikut:<br/>•"
           f" <b>Total Ulasan Negatif ({tot:,} ulasan)</b>: Akumulasi seluruh"
-          " keluhan pengguna bintang 1 s.d. 3 yang terekam pada Google Play"
-          " Store.<br/>• <b>Badge Merah pada Kendala Aplikasi"
-          f" ({app_cnt/tot*100:.1f}%) dan Kendala Bisnis"
-          f" ({biz_cnt/tot*100:.1f}%)</b>: Merupakan <b>persentase porsi"
-          " kontribusi dari total ulasan</b> (bukan nilai lonjakan bulanan/MoM)."
-          " Diberi highlight merah karena parameter kendala dikonfigurasi"
-          " sebagai metrik negatif (beban keluhan operasional yang membutuhkan"
-          " penanganan).<br/>• <b>Badge Hijau pada Tingkat Respon CS"
-          f" ({reply_rate:.1f}%) dan SLA ({median_sla:.1f} Jam)</b>:"
-          " Menunjukkan pencapaian positif tim pelayanan digital PLN 123 yang"
-          " berhasil menanggapi mayoritas keluhan pelanggan dengan kecepatan"
-          " rata-rata di bawah ambang batas toleransi 2 jam.",
+          " keluhan pengguna bintang 1 s.d. 3 pada dataset/filter aktif.<br/>•"
+          f" <b>Badge Merah pada Kendala Aplikasi ({app_pct:.1f}%) dan Kendala"
+          f" Bisnis ({biz_pct:.1f}%)</b>: Merupakan <b>persentase porsi"
+          " kontribusi dari total ulasan</b> (bukan nilai lonjakan"
+          " bulanan/MoM), diberi highlight merah sebagai beban keluhan"
+          " operasional yang membutuhkan penanganan.<br/>• <b>Badge Hijau pada"
+          f" Tingkat Respon CS ({reply_rate:.1f}%) dan SLA ({median_sla:.1f}"
+          " Jam)</b>: Menunjukkan capaian responsivitas tim pelayanan digital"
+          " PLN 123 dalam menanggapi keluhan pelanggan.",
           body_style,
       )
   )
 
   # ========================================================
-  # HALAMAN 2: GRAFIK 1 & GRAFIK 2 (DONUT DENGAN LEGENDA SAMPING)
+  # HALAMAN 2: GRAFIK 1 & GRAFIK 2
   # ========================================================
   story.append(PageBreak())
   story.append(
@@ -362,7 +414,6 @@ def generate_full_pdf_report(df_source):
       )
   )
 
-  # Grafik 1: Donut Klasifikasi Utama (Bebas tumpang tindih)
   fig1, ax1 = plt.subplots(figsize=(6.6, 2.7))
   main_counts = df_source["Klasifikasi Utama"].value_counts()
   colors_main = ["#F39C12", "#95A5A6", "#00A4E4"]
@@ -407,20 +458,35 @@ def generate_full_pdf_report(df_source):
       pad=14,
   )
   story.append(make_clean_image(fig1, 520, 180))
+
+  if biz_cnt > app_cnt:
+    g1_lead = (
+        f"Keluhan Proses Bisnis ({biz_pct:.1f}%) lebih dominan dibanding"
+        f" kendala murni teknis aplikasi ({app_pct:.1f}%)."
+    )
+  elif app_cnt > biz_cnt:
+    g1_lead = (
+        f"Kendala teknis aplikasi ({app_pct:.1f}%) lebih dominan dibanding"
+        f" keluhan proses bisnis ({biz_pct:.1f}%)."
+    )
+  else:
+    g1_lead = (
+        f"Keluhan Proses Bisnis ({biz_pct:.1f}%) dan Kendala Aplikasi"
+        f" ({app_pct:.1f}%) memiliki proporsi yang berimbang."
+    )
+
   story.append(
       Paragraph(
-          "<b>Analisis & Insight Grafik 1:</b> Keluhan Proses Bisnis (38,6%)"
-          " lebih dominan dibanding kendala murni teknis aplikasi (29,3%). Hal"
-          " ini membuktikan bahwa pengguna memperlakukan PLN Mobile sebagai"
-          " gerbang layanan listrik secara riil. Ketidakpuasan pelanggan atas"
-          " padam listrik, lambatnya regu lapangan, dan lonjakan tagihan"
-          " diluapkan langsung ke rating toko aplikasi.",
+          f"<b>Analisis & Insight Grafik 1:</b> {g1_lead} Hal ini membuktikan"
+          " bahwa pengguna memperlakukan PLN Mobile sebagai gerbang layanan"
+          " kelistrikan secara menyeluruh, sehingga kendala lapangan maupun"
+          " performa aplikasi berdampak langsung terhadap penilaian di toko"
+          " aplikasi.",
           insight_style,
       )
   )
   story.append(Spacer(1, 8))
 
-  # Grafik 2: Donut Sebaran Versi (Slices < 5% disembunyikan labelnya agar tidak overlap)
   fig2, ax2 = plt.subplots(figsize=(6.6, 2.7))
   ver_counts = df_source["Versi_Group"].value_counts()
   colors_ver = [
@@ -472,21 +538,27 @@ def generate_full_pdf_report(df_source):
       pad=14,
   )
   story.append(make_clean_image(fig2, 520, 180))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 2:</b> Sebagian besar keluhan berasal"
-          " dari basis instalasi lawas (Versi 5.x & Tanpa Versi). Namun pada"
-          " rilis modern 8.x, Versi 8.1.1 (842 ulasan) dan Versi 8.1.2 (471"
-          " ulasan) mencatatkan kendala teknis yang signifikan. Kabar baiknya,"
-          " rilis termutakhir Versi 8.1.3 (80 ulasan) memiliki volume keluhan"
-          " terendah, mencerminkan efektivitas patch stabilisasi yang"
-          " digulirkan.",
-          insight_style,
-      )
-  )
+
+  if len(ver_counts) >= 2:
+    g2_text = (
+        f"<b>Analisis & Insight Grafik 2:</b> Konsentrasi keluhan terbesar"
+        f" berasal dari <b>{ver_counts.index[0]}</b> ({int(ver_counts.iloc[0]):,}"
+        f" ulasan / {ver_counts.iloc[0]/tot*100:.1f}%), diikuti oleh"
+        f" <b>{ver_counts.index[1]}</b> ({int(ver_counts.iloc[1]):,} ulasan)."
+        f" Sementara itu, klaster <b>{ver_counts.index[-1]}</b> mencatatkan"
+        f" volume terendah ({int(ver_counts.iloc[-1]):,} ulasan) pada periode"
+        " ini."
+    )
+  else:
+    g2_text = (
+        "<b>Analisis & Insight Grafik 2:</b> Seluruh ulasan pada filter aktif"
+        f" berasal dari klaster <b>{ver_counts.index[0]}</b>"
+        f" ({int(ver_counts.iloc[0]):,} ulasan)."
+    )
+  story.append(Paragraph(g2_text, insight_style))
 
   # ========================================================
-  # HALAMAN 3: GRAFIK 3 & GRAFIK 4 (BAR DENGAN TEXTWRAP LENGKAP)
+  # HALAMAN 3: GRAFIK 3 & GRAFIK 4
   # ========================================================
   story.append(PageBreak())
   story.append(
@@ -498,38 +570,52 @@ def generate_full_pdf_report(df_source):
 
   # Grafik 3: Subklasifikasi Kendala Aplikasi
   fig3, ax3 = plt.subplots(figsize=(7.2, 3.0))
-  sub_app = (
+  sub_app_desc = (
       df_source[df_source["Klasifikasi Utama"] == "Kendala Aplikasi"][
           "Subklasifikasi"
       ]
+      .dropna()
       .value_counts()
-      .head(8)
-      .sort_values(ascending=True)
   )
-  wrapped_labels3 = [textwrap.fill(s, width=28) for s in sub_app.index]
-  bars3 = ax3.barh(
-      range(len(sub_app)),
-      sub_app.values,
-      color="#00A4E4",
-      edgecolor="#0A3960",
-      height=0.65,
-  )
-  ax3.set_yticks(range(len(sub_app)))
-  ax3.set_yticklabels(wrapped_labels3, fontsize=7.5, color="#2C3E50")
-  max_app = max(sub_app.values)
-  ax3.set_xlim(0, max_app * 1.18)
-  for bar in bars3:
-    w = bar.get_width()
-    ax3.text(
-        w + max_app * 0.015,
-        bar.get_y() + bar.get_height() / 2,
-        f"{w:,} ({w/tot*100:.1f}%)",
-        va="center",
-        ha="left",
-        fontsize=7.5,
-        weight="bold",
-        color="#0A3960",
+  sub_app = sub_app_desc.head(8).sort_values(ascending=True)
+  if not sub_app.empty:
+    wrapped_labels3 = [textwrap.fill(str(s), width=28) for s in sub_app.index]
+    bars3 = ax3.barh(
+        range(len(sub_app)),
+        sub_app.values,
+        color="#00A4E4",
+        edgecolor="#0A3960",
+        height=0.65,
     )
+    ax3.set_yticks(range(len(sub_app)))
+    ax3.set_yticklabels(wrapped_labels3, fontsize=7.5, color="#2C3E50")
+    max_app = max(sub_app.values)
+    ax3.set_xlim(0, max_app * 1.18)
+    for bar in bars3:
+      w = bar.get_width()
+      ax3.text(
+          w + max_app * 0.015,
+          bar.get_y() + bar.get_height() / 2,
+          f"{int(w):,} ({w/tot*100:.1f}%)",
+          va="center",
+          ha="left",
+          fontsize=7.5,
+          weight="bold",
+          color="#0A3960",
+      )
+  else:
+    ax3.text(
+        0.5,
+        0.5,
+        "Tidak ada data Kendala Aplikasi pada filter aktif",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#7F8C8D",
+    )
+    ax3.set_xticks([])
+    ax3.set_yticks([])
+
   ax3.set_title(
       "Grafik 3: Subklasifikasi Kendala Aplikasi Terbesar",
       fontsize=10.5,
@@ -541,52 +627,78 @@ def generate_full_pdf_report(df_source):
   ax3.spines["top"].set_visible(False)
   ax3.spines["right"].set_visible(False)
   story.append(make_clean_image(fig3, 520, 185))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 3:</b> Dua pemicu utama di sisi teknis"
-          " adalah kegagalan modul <i>Login, Registrasi, dan OTP</i> (721"
-          " ulasan) serta <i>Performa dan konektivitas aplikasi</i> (698"
-          " ulasan). Antrean pengiriman OTP SMS/WA dan latensi server saat"
-          " beban puncak menjadi titik kritis yang mendesak untuk diperbaiki.",
-          insight_style,
-      )
-  )
+
+  if len(sub_app_desc) >= 2:
+    g3_text = (
+        "<b>Analisis & Insight Grafik 3:</b> Dua pemicu utama di sisi teknis"
+        f" adalah modul <i>{sub_app_desc.index[0]}</i>"
+        f" ({int(sub_app_desc.iloc[0]):,} ulasan) serta"
+        f" <i>{sub_app_desc.index[1]}</i> ({int(sub_app_desc.iloc[1]):,}"
+        " ulasan). Kedua komponen ini menjadi titik kritis utama yang mendesak"
+        " untuk dioptimalkan."
+    )
+  elif len(sub_app_desc) == 1:
+    g3_text = (
+        "<b>Analisis & Insight Grafik 3:</b> Pemicu utama kendala teknis"
+        f" terpusat pada <i>{sub_app_desc.index[0]}</i>"
+        f" ({int(sub_app_desc.iloc[0]):,} ulasan)."
+    )
+  else:
+    g3_text = (
+        "<b>Analisis & Insight Grafik 3:</b> Tidak terdapat data subklasifikasi"
+        " Kendala Aplikasi pada filter yang dipilih."
+    )
+  story.append(Paragraph(g3_text, insight_style))
   story.append(Spacer(1, 8))
 
   # Grafik 4: Subklasifikasi Kendala Proses Bisnis
   fig4, ax4 = plt.subplots(figsize=(7.2, 3.0))
-  sub_biz = (
+  sub_biz_desc = (
       df_source[df_source["Klasifikasi Utama"] == "Kendala Proses Bisnis"][
           "Subklasifikasi"
       ]
+      .dropna()
       .value_counts()
-      .head(8)
-      .sort_values(ascending=True)
   )
-  wrapped_labels4 = [textwrap.fill(s, width=28) for s in sub_biz.index]
-  bars4 = ax4.barh(
-      range(len(sub_biz)),
-      sub_biz.values,
-      color="#F39C12",
-      edgecolor="#B9770E",
-      height=0.65,
-  )
-  ax4.set_yticks(range(len(sub_biz)))
-  ax4.set_yticklabels(wrapped_labels4, fontsize=7.5, color="#2C3E50")
-  max_biz = max(sub_biz.values)
-  ax4.set_xlim(0, max_biz * 1.18)
-  for bar in bars4:
-    w = bar.get_width()
-    ax4.text(
-        w + max_biz * 0.015,
-        bar.get_y() + bar.get_height() / 2,
-        f"{w:,} ({w/tot*100:.1f}%)",
-        va="center",
-        ha="left",
-        fontsize=7.5,
-        weight="bold",
-        color="#B9770E",
+  sub_biz = sub_biz_desc.head(8).sort_values(ascending=True)
+  if not sub_biz.empty:
+    wrapped_labels4 = [textwrap.fill(str(s), width=28) for s in sub_biz.index]
+    bars4 = ax4.barh(
+        range(len(sub_biz)),
+        sub_biz.values,
+        color="#F39C12",
+        edgecolor="#B9770E",
+        height=0.65,
     )
+    ax4.set_yticks(range(len(sub_biz)))
+    ax4.set_yticklabels(wrapped_labels4, fontsize=7.5, color="#2C3E50")
+    max_biz = max(sub_biz.values)
+    ax4.set_xlim(0, max_biz * 1.18)
+    for bar in bars4:
+      w = bar.get_width()
+      ax4.text(
+          w + max_biz * 0.015,
+          bar.get_y() + bar.get_height() / 2,
+          f"{int(w):,} ({w/tot*100:.1f}%)",
+          va="center",
+          ha="left",
+          fontsize=7.5,
+          weight="bold",
+          color="#B9770E",
+      )
+  else:
+    ax4.text(
+        0.5,
+        0.5,
+        "Tidak ada data Kendala Proses Bisnis pada filter aktif",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#7F8C8D",
+    )
+    ax4.set_xticks([])
+    ax4.set_yticks([])
+
   ax4.set_title(
       "Grafik 4: Subklasifikasi Kendala Proses Bisnis Terbesar",
       fontsize=10.5,
@@ -598,34 +710,51 @@ def generate_full_pdf_report(df_source):
   ax4.spines["top"].set_visible(False)
   ax4.spines["right"].set_visible(False)
   story.append(make_clean_image(fig4, 520, 185))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 4:</b> Keluhan operasional terbesar"
-          " terpusat pada <i>Gangguan pasokan listrik / pemadaman</i> (967"
-          " ulasan) dan <i>Tindak lanjut aduan lambat</i> (462 ulasan)."
-          " Sementara itu, isu <i>Pengaduan dibatalkan / ditutup sepihak</i>"
-          " (221 ulasan) menjadi alasan utama pelanggan memberikan bintang 1"
-          " akibat status selesai sebelum perbaikan fisik selesai.",
-          insight_style,
-      )
-  )
+
+  if len(sub_biz_desc) >= 3:
+    g4_text = (
+        "<b>Analisis & Insight Grafik 4:</b> Keluhan operasional terbesar"
+        f" terpusat pada <i>{sub_biz_desc.index[0]}</i>"
+        f" ({int(sub_biz_desc.iloc[0]):,} ulasan) dan"
+        f" <i>{sub_biz_desc.index[1]}</i> ({int(sub_biz_desc.iloc[1]):,}"
+        f" ulasan), diikuti oleh <i>{sub_biz_desc.index[2]}</i>"
+        f" ({int(sub_biz_desc.iloc[2]):,} ulasan) yang sangat memengaruhi"
+        " persepsi kepuasan pelanggan."
+    )
+  elif len(sub_biz_desc) >= 1:
+    g4_text = (
+        "<b>Analisis & Insight Grafik 4:</b> Keluhan operasional terbesar"
+        f" terpusat pada <i>{sub_biz_desc.index[0]}</i>"
+        f" ({int(sub_biz_desc.iloc[0]):,} ulasan)."
+    )
+  else:
+    g4_text = (
+        "<b>Analisis & Insight Grafik 4:</b> Tidak terdapat data subklasifikasi"
+        " Kendala Proses Bisnis pada filter yang dipilih."
+    )
+  story.append(Paragraph(g4_text, insight_style))
 
   # ========================================================
-  # HALAMAN 4: GRAFIK 5 & GRAFIK 6 (TREN WAKTU BULANAN & TAHUNAN)
+  # HALAMAN 4: GRAFIK 5 & GRAFIK 6
   # ========================================================
   story.append(PageBreak())
+  max_year_pdf = (
+      int(df_source["Tahun"].max())
+      if "Tahun" in df_source.columns and df_source["Tahun"].notna().any()
+      else 2026
+  )
   story.append(
       Paragraph(
-          "Bagian III: Dinamika Waktu (Tren Bulanan 2026 & Tren Tahunan)",
+          f"Bagian III: Dinamika Waktu (Tren Bulanan {max_year_pdf} & Tren"
+          " Tahunan)",
           h2_style,
       )
   )
 
-  # Grafik 5: Tren Bulanan 2026 Saja (Legenda di atas, semua bulan tampil)
   fig5, ax5 = plt.subplots(figsize=(7.2, 2.9))
-  df_2026 = df_source[df_source["Tahun"] == 2026]
-  monthly_2026 = (
-      df_2026.groupby(["Bulan_Tahun", "Klasifikasi Utama"])
+  df_latest_yr = df_source[df_source["Tahun"] == max_year_pdf]
+  monthly_yr = (
+      df_latest_yr.groupby(["Bulan_Tahun", "Klasifikasi Utama"])
       .size()
       .unstack(fill_value=0)
   )
@@ -634,35 +763,24 @@ def generate_full_pdf_report(df_source):
       "Kendala Proses Bisnis": "#F39C12",
       "Belum dapat diklasifikasikan": "#95A5A6",
   }
-  for col in monthly_2026.columns:
+  for col in monthly_yr.columns:
     ax5.plot(
-        range(len(monthly_2026)),
-        monthly_2026[col],
+        range(len(monthly_yr)),
+        monthly_yr[col],
         marker="o",
         markersize=4.5,
         linewidth=2,
         label=col,
         color=color_dict.get(col, "#333333"),
     )
-  bulan_short_pdf = {
-      "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
-      "05": "Mei", "06": "Jun", "07": "Jul", "08": "Agu",
-      "09": "Sep", "10": "Okt", "11": "Nov", "12": "Des"
-  }
-  xticklabels_pdf = []
-  for bt in monthly_2026.index:
-    parts = str(bt).split("-")
-    if len(parts) == 2 and parts[1] in bulan_short_pdf:
-      xticklabels_pdf.append(f"{bulan_short_pdf[parts[1]]} {parts[0]}")
-    else:
-      xticklabels_pdf.append(str(bt))
 
-  ax5.set_xticks(range(len(monthly_2026)))
+  xticklabels_pdf = [format_periode_id(bt, short=True) for bt in monthly_yr.index]
+  ax5.set_xticks(range(len(monthly_yr)))
   ax5.set_xticklabels(
       xticklabels_pdf, rotation=35, ha="right", fontsize=7.5, color="#2C3E50"
   )
   ax5.set_title(
-      "Grafik 5: Tren Bulanan Ulasan Negatif Tahun 2026",
+      f"Grafik 5: Tren Bulanan Ulasan Negatif Tahun {max_year_pdf}",
       fontsize=10.5,
       weight="bold",
       color="#0A3960",
@@ -670,20 +788,22 @@ def generate_full_pdf_report(df_source):
   )
   ax5.set_ylabel("Jumlah Ulasan", fontsize=8, color="#2C3E50")
   ax5.grid(True, linestyle="--", alpha=0.3)
-  ax5.legend(
-      loc="lower center",
-      bbox_to_anchor=(0.5, 1.01),
-      ncol=3,
-      fontsize=7.5,
-      frameon=False,
-  )
+  if len(monthly_yr.columns) > 0:
+    ax5.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncol=3,
+        fontsize=7.5,
+        frameon=False,
+    )
   ax5.spines["top"].set_visible(False)
   ax5.spines["right"].set_visible(False)
 
-  # Anotasi garis vertikal Update Sistem (September 2026) jika ada
-  if "2026-09" in list(monthly_2026.index):
-    sep_idx = list(monthly_2026.index).index("2026-09")
-    ax5.axvline(x=sep_idx, color="#2C3E50", linestyle="--", linewidth=1.2, alpha=0.8)
+  if "2026-09" in list(monthly_yr.index):
+    sep_idx = list(monthly_yr.index).index("2026-09")
+    ax5.axvline(
+        x=sep_idx, color="#2C3E50", linestyle="--", linewidth=1.2, alpha=0.8
+    )
     ax5.text(
         sep_idx,
         ax5.get_ylim()[1] * 0.92,
@@ -694,25 +814,36 @@ def generate_full_pdf_report(df_source):
     )
 
   story.append(make_clean_image(fig5, 520, 180))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 5:</b> Volume keluhan stabil di kisaran"
-          " 500-600 ulasan pada Q1 2026, lalu melonjak pada Mei (830) dan Juni"
-          " (922). Puncak anomali terjadi pada Oktober 2026 (1.094 ulasan) di"
-          " mana kendala aplikasi melesat tajam akibat peluncuran rilis v8.1.2"
-          " yang mengalami kendala otentikasi login.",
-          insight_style,
-      )
-  )
+
+  monthly_tot = df_latest_yr.groupby("Bulan_Tahun").size()
+  if not monthly_tot.empty:
+    peak_bt = monthly_tot.idxmax()
+    peak_val = int(monthly_tot.max())
+    min_bt = monthly_tot.idxmin()
+    min_val = int(monthly_tot.min())
+    peak_cat_s = df_latest_yr[df_latest_yr["Bulan_Tahun"] == peak_bt][
+        "Klasifikasi Utama"
+    ].value_counts()
+    peak_dom_cat = peak_cat_s.index[0] if not peak_cat_s.empty else "-"
+    peak_dom_cnt = int(peak_cat_s.iloc[0]) if not peak_cat_s.empty else 0
+    g5_text = (
+        f"<b>Analisis & Insight Grafik 5:</b> Sepanjang tahun {max_year_pdf},"
+        f" volume keluhan bulanan bergerak dari titik terendah {min_val:,}"
+        f" ulasan ({format_periode_id(min_bt)}) hingga titik puncak"
+        f" <b>{peak_val:,} ulasan pada {format_periode_id(peak_bt)}</b>."
+        f" Lonjakan puncak tersebut didominasi oleh kategori <b>{peak_dom_cat}</b>"
+        f" ({peak_dom_cnt:,} ulasan)."
+    )
+  else:
+    g5_text = (
+        "<b>Analisis & Insight Grafik 5:</b> Tidak terdapat data bulanan pada"
+        " filter yang dipilih."
+    )
+  story.append(Paragraph(g5_text, insight_style))
   story.append(Spacer(1, 8))
 
-  # Grafik 6: Tren Tahunan (Stacked Bar Bersih - Khusus Tahun Ini & Tahun Lalu)
+  # Grafik 6: Tren Tahunan (YoY)
   fig6, ax6 = plt.subplots(figsize=(7.2, 2.9))
-  max_year_pdf = (
-      int(df_source["Tahun"].max())
-      if "Tahun" in df_source.columns and df_source["Tahun"].notna().any()
-      else 2026
-  )
   target_years_pdf = [max_year_pdf - 1, max_year_pdf]
   df_source_yoy = df_source[df_source["Tahun"].isin(target_years_pdf)]
   yearly_df = (
@@ -720,7 +851,7 @@ def generate_full_pdf_report(df_source):
       .size()
       .unstack(fill_value=0)
   )
-  years = [str(y) for y in yearly_df.index]
+  years = [str(int(y)) for y in yearly_df.index]
   bottom = np.zeros(len(years))
   for col in yearly_df.columns:
     vals = yearly_df[col].values
@@ -736,7 +867,8 @@ def generate_full_pdf_report(df_source):
   for i, tot_yr in enumerate(bottom):
     ax6.text(
         i,
-        tot_yr + (max(bottom) * 0.02 if len(bottom) > 0 and max(bottom) > 0 else 100),
+        tot_yr
+        + (max(bottom) * 0.02 if len(bottom) > 0 and max(bottom) > 0 else 10),
         f"{int(tot_yr):,}",
         ha="center",
         va="bottom",
@@ -745,35 +877,56 @@ def generate_full_pdf_report(df_source):
         color="#0A3960",
     )
   ax6.set_title(
-      f"Grafik 6: Tren Tahunan Ulasan Negatif (Year-over-Year {target_years_pdf[0]} - {target_years_pdf[1]})",
+      "Grafik 6: Tren Tahunan Ulasan Negatif (Year-over-Year"
+      f" {target_years_pdf[0]} - {target_years_pdf[1]})",
       fontsize=10.5,
       weight="bold",
       color="#0A3960",
       pad=24,
   )
   ax6.set_ylabel("Total Ulasan", fontsize=8, color="#2C3E50")
-  ax6.set_ylim(0, (max(bottom) if len(bottom) > 0 else 1000) * 1.15)
+  ax6.set_ylim(0, (max(bottom) if len(bottom) > 0 else 100) * 1.15)
   ax6.yaxis.set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
   ax6.grid(axis="y", linestyle="--", alpha=0.3)
-  ax6.legend(
-      loc="lower center",
-      bbox_to_anchor=(0.5, 1.01),
-      ncol=3,
-      fontsize=7.5,
-      frameon=False,
-  )
+  if len(yearly_df.columns) > 0:
+    ax6.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncol=3,
+        fontsize=7.5,
+        frameon=False,
+    )
   ax6.spines["top"].set_visible(False)
   ax6.spines["right"].set_visible(False)
   story.append(make_clean_image(fig6, 520, 180))
-  story.append(
-      Paragraph(
-          f"<b>Analisis & Insight Grafik 6:</b> Perbandingan YoY menunjukkan total ulasan pada tahun {target_years_pdf[0]} tercatat {int(bottom[0]) if len(bottom) > 0 else 0:,} ulasan dan pada tahun {target_years_pdf[1]} tercatat {int(bottom[1]) if len(bottom) > 1 else (int(bottom[0]) if len(bottom) > 0 else 0):,} ulasan. Peningkatan ini sejalan dengan percepatan adopsi pengguna aktif PLN Mobile pasca program digitalisasi nasional.",
-          insight_style,
-      )
-  )
+
+  if len(bottom) >= 2 and bottom[0] > 0:
+    yoy_pct = (bottom[1] - bottom[0]) / bottom[0] * 100
+    arah = (
+        "peningkatan"
+        if yoy_pct > 0
+        else ("penurunan" if yoy_pct < 0 else "stabilitas")
+    )
+    g6_text = (
+        "<b>Analisis & Insight Grafik 6:</b> Perbandingan YoY menunjukkan total"
+        f" ulasan pada tahun {years[0]} tercatat {int(bottom[0]):,} ulasan dan"
+        f" pada tahun {years[1]} tercatat {int(bottom[1]):,} ulasan (mengalami"
+        f" {arah} sebesar {abs(yoy_pct):.1f}%)."
+    )
+  elif len(bottom) == 1:
+    g6_text = (
+        "<b>Analisis & Insight Grafik 6:</b> Data historis pada filter saat ini"
+        f" mencakup tahun {years[0]} dengan total {int(bottom[0]):,} ulasan."
+    )
+  else:
+    g6_text = (
+        "<b>Analisis & Insight Grafik 6:</b> Tidak terdapat data perbandingan"
+        " tahunan pada filter aktif."
+    )
+  story.append(Paragraph(g6_text, insight_style))
 
   # ========================================================
-  # HALAMAN 5: GRAFIK 7 & GRAFIK 8 (KATA KUNCI & SEVERITY)
+  # HALAMAN 5: GRAFIK 7 & GRAFIK 8
   # ========================================================
   story.append(PageBreak())
   story.append(
@@ -782,38 +935,46 @@ def generate_full_pdf_report(df_source):
       )
   )
 
-  # Grafik 7: Top 10 Kata Pemicu (Murni kata kunci)
   fig7, ax7 = plt.subplots(figsize=(7.2, 3.0))
-  top_kw = (
-      df_source["Kata_Pemicu_Clean"]
-      .dropna()
-      .value_counts()
-      .head(10)
-      .sort_values(ascending=True)
-  )
-  bars7 = ax7.barh(
-      range(len(top_kw)),
-      top_kw.values,
-      color="#C0392B",
-      edgecolor="#922B21",
-      height=0.65,
-  )
-  ax7.set_yticks(range(len(top_kw)))
-  ax7.set_yticklabels(top_kw.index, fontsize=8, color="#2C3E50")
-  max_kw = max(top_kw.values)
-  ax7.set_xlim(0, max_kw * 1.16)
-  for bar in bars7:
-    w = bar.get_width()
-    ax7.text(
-        w + max_kw * 0.015,
-        bar.get_y() + bar.get_height() / 2,
-        f"{w:,}",
-        va="center",
-        ha="left",
-        fontsize=7.5,
-        weight="bold",
-        color="#922B21",
+  top_kw_desc = df_source["Kata_Pemicu_Clean"].dropna().value_counts()
+  top_kw = top_kw_desc.head(10).sort_values(ascending=True)
+  if not top_kw.empty:
+    bars7 = ax7.barh(
+        range(len(top_kw)),
+        top_kw.values,
+        color="#C0392B",
+        edgecolor="#922B21",
+        height=0.65,
     )
+    ax7.set_yticks(range(len(top_kw)))
+    ax7.set_yticklabels(top_kw.index, fontsize=8, color="#2C3E50")
+    max_kw = max(top_kw.values)
+    ax7.set_xlim(0, max_kw * 1.16)
+    for bar in bars7:
+      w = bar.get_width()
+      ax7.text(
+          w + max_kw * 0.015,
+          bar.get_y() + bar.get_height() / 2,
+          f"{int(w):,}",
+          va="center",
+          ha="left",
+          fontsize=7.5,
+          weight="bold",
+          color="#922B21",
+      )
+  else:
+    ax7.text(
+        0.5,
+        0.5,
+        "Tidak ada kata kunci terdeteksi",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#7F8C8D",
+    )
+    ax7.set_xticks([])
+    ax7.set_yticks([])
+
   ax7.set_title(
       "Grafik 7: Top 10 Kata / Frasa Pemicu Keluhan (Bersih Non-Keyword)",
       fontsize=10.5,
@@ -825,42 +986,37 @@ def generate_full_pdf_report(df_source):
   ax7.spines["top"].set_visible(False)
   ax7.spines["right"].set_visible(False)
   story.append(make_clean_image(fig7, 520, 185))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 7:</b> Kata kunci pemicu komplain"
-          " terbesar adalah <i>'login'</i> (264x), <i>'mati lampu'</i> (247x),"
-          " <i>'pembayaran'</i> (172x), <i>'pemadaman'</i> (162x), dan"
-          " <i>'lemot'</i> (160x). Kata-kata ini merefleksikan dua pilar fokus"
-          " manajemen: keandalan sistem auth/payment di sisi aplikasi dan"
-          " keandalan suplai listrik fisik.",
-          insight_style,
-      )
-  )
+
+  top5_kw = top_kw_desc.head(5)
+  if not top5_kw.empty:
+    kw_list_str = ", ".join(
+        [f"<i>'{k}'</i> ({int(v):,}x)" for k, v in top5_kw.items()]
+    )
+    g7_text = (
+        "<b>Analisis & Insight Grafik 7:</b> Kata kunci pemicu komplain"
+        f" terbesar adalah {kw_list_str}. Frasa dominan ini merefleksikan"
+        " fokus utama keluhan pelanggan pada layanan aplikasi maupun suplai"
+        " listrik."
+    )
+  else:
+    g7_text = (
+        "<b>Analisis & Insight Grafik 7:</b> Tidak ditemukan kata kunci pemicu"
+        " spesifik pada data yang difilter."
+    )
+  story.append(Paragraph(g7_text, insight_style))
   story.append(Spacer(1, 8))
 
-  # Grafik 8: Distribusi Tingkat Keparahan Rating (Labels rapi 2 baris)
+  # Grafik 8: Distribusi Tingkat Keparahan Rating
   fig8, ax8 = plt.subplots(figsize=(7.2, 3.0))
   rating_df = (
       df_source.groupby(["Klasifikasi Utama", "Rating"])
       .size()
       .unstack(fill_value=0)
   )
-  wrapped_cats = [textwrap.fill(c, 16) for c in rating_df.index]
-  b1 = (
-      rating_df[1].values
-      if 1 in rating_df
-      else np.zeros(len(rating_df))
-  )
-  b2 = (
-      rating_df[2].values
-      if 2 in rating_df
-      else np.zeros(len(rating_df))
-  )
-  b3 = (
-      rating_df[3].values
-      if 3 in rating_df
-      else np.zeros(len(rating_df))
-  )
+  wrapped_cats = [textwrap.fill(str(c), 16) for c in rating_df.index]
+  b1 = rating_df[1].values if 1 in rating_df else np.zeros(len(rating_df))
+  b2 = rating_df[2].values if 2 in rating_df else np.zeros(len(rating_df))
+  b3 = rating_df[3].values if 3 in rating_df else np.zeros(len(rating_df))
   w_bar = 0.5
   ax8.bar(
       range(len(rating_df)),
@@ -886,11 +1042,12 @@ def generate_full_pdf_report(df_source):
       color="#F1C40F",
   )
   totals = b1 + b2 + b3
+  max_tot_r = max(totals) if len(totals) > 0 and max(totals) > 0 else 100
   for i, tot_r in enumerate(totals):
     ax8.text(
         i,
-        tot_r + 60,
-        f"{tot_r:,}",
+        tot_r + max_tot_r * 0.02,
+        f"{int(tot_r):,}",
         ha="center",
         va="bottom",
         fontsize=7.5,
@@ -899,7 +1056,7 @@ def generate_full_pdf_report(df_source):
     )
   ax8.set_xticks(range(len(rating_df)))
   ax8.set_xticklabels(wrapped_cats, fontsize=8, color="#2C3E50")
-  ax8.set_ylim(0, max(totals) * 1.15)
+  ax8.set_ylim(0, max_tot_r * 1.15)
   ax8.yaxis.set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
   ax8.set_title(
       "Grafik 8: Distribusi Tingkat Keparahan Rating (1, 2, 3) per Kategori",
@@ -919,19 +1076,30 @@ def generate_full_pdf_report(df_source):
   ax8.spines["top"].set_visible(False)
   ax8.spines["right"].set_visible(False)
   story.append(make_clean_image(fig8, 520, 185))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 8:</b> Lebih dari 85% ulasan negatif"
-          " terpusat pada Rating 1 (Kritis). Sentimen negatif paling keras"
-          " dialami pada kelompok Kendala Proses Bisnis (2.661 ulasan bintang"
-          " 1), menegaskan tingginya sensitivitas pelanggan terhadap pemadaman"
-          " listrik dan ketidaksesuaian nominal tagihan.",
-          insight_style,
-      )
-  )
+
+  r1_cnt = int((df_source["Rating"] == 1).sum())
+  r1_pct = (r1_cnt / tot * 100) if tot > 0 else 0.0
+  r1_by_cat = df_source[df_source["Rating"] == 1][
+      "Klasifikasi Utama"
+  ].value_counts()
+  if not r1_by_cat.empty:
+    g8_text = (
+        f"<b>Analisis & Insight Grafik 8:</b> Sebanyak {r1_pct:.1f}% ({r1_cnt:,}"
+        " ulasan) dari total ulasan negatif terpusat pada Rating 1 (Kritis)."
+        " Sentimen negatif paling keras dialami pada kelompok"
+        f" <b>{r1_by_cat.index[0]}</b> ({int(r1_by_cat.iloc[0]):,} ulasan"
+        " bintang 1), menegaskan tingginya sensitivitas pelanggan terhadap"
+        " kendala pada kategori tersebut."
+    )
+  else:
+    g8_text = (
+        f"<b>Analisis & Insight Grafik 8:</b> Proporsi ulasan Rating 1 (Kritis)"
+        f" pada filter aktif tercatat sebesar {r1_pct:.1f}% ({r1_cnt:,} ulasan)."
+    )
+  story.append(Paragraph(g8_text, insight_style))
 
   # ========================================================
-  # HALAMAN 6: GRAFIK 9, 10 & 11 (HEATMAP & EVALUASI CS)
+  # HALAMAN 6: GRAFIK 9, 10 & 11
   # ========================================================
   story.append(PageBreak())
   story.append(
@@ -941,42 +1109,90 @@ def generate_full_pdf_report(df_source):
       )
   )
 
-  # Grafik 9: Heatmap Korelasi Versi vs Kendala
+  # Grafik 9: Heatmap Korelasi Versi vs Kendala (100% Dinamis Top 5)
   fig9, ax9 = plt.subplots(figsize=(7.2, 2.5))
-  top_versions = ["08.01.01", "5.2.77", "5.2.79", "5.2.80", "5.2.81"]
-  top_subcats = [
-      "Gangguan pasokan listrik / pemadaman",
-      "Login, Registrasi, dan OTP",
-      "Performa dan konektivitas aplikasi",
-      "Tagihan, pencatatan meter, dan tarif",
-      "Transaksi digital gagal / status tidak sinkron",
-  ]
+  top_versions = (
+      df_source["reviewCreatedVersion"]
+      .dropna()
+      .astype(str)
+      .loc[lambda s: ~s.str.strip().isin(["", "nan", "-", "None"])]
+      .value_counts()
+      .head(5)
+      .index.tolist()
+      if "reviewCreatedVersion" in df_source.columns
+      else []
+  )
+  top_subcats = (
+      df_source[
+          df_source["Klasifikasi Utama"].isin(
+              ["Kendala Aplikasi", "Kendala Proses Bisnis"]
+          )
+      ]["Subklasifikasi"]
+      .dropna()
+      .value_counts()
+      .head(5)
+      .index.tolist()
+  )
   df_heat = df_source[
-      df_source["reviewCreatedVersion"].isin(top_versions)
+      df_source["reviewCreatedVersion"].astype(str).isin(top_versions)
       & df_source["Subklasifikasi"].isin(top_subcats)
   ]
   heat_matrix = pd.crosstab(
-      df_heat["Subklasifikasi"], df_heat["reviewCreatedVersion"]
+      df_heat["Subklasifikasi"], df_heat["reviewCreatedVersion"].astype(str)
   )
-  im = ax9.imshow(heat_matrix.values, cmap="Blues", aspect="auto")
-  ax9.set_xticks(range(len(heat_matrix.columns)))
-  ax9.set_xticklabels(heat_matrix.columns, fontsize=7.5)
-  ax9.set_yticks(range(len(heat_matrix.index)))
-  wrapped_sub_heat = [textwrap.fill(s, 26) for s in heat_matrix.index]
-  ax9.set_yticklabels(wrapped_sub_heat, fontsize=7)
-  for i in range(len(heat_matrix.index)):
-    for j in range(len(heat_matrix.columns)):
-      val_h = heat_matrix.values[i, j]
-      ax9.text(
-          j,
-          i,
-          str(val_h),
-          ha="center",
-          va="center",
-          color="white" if val_h > 120 else "black",
-          fontsize=7.5,
-          weight="bold",
-      )
+
+  if not heat_matrix.empty:
+    im = ax9.imshow(heat_matrix.values, cmap="Blues", aspect="auto")
+    ax9.set_xticks(range(len(heat_matrix.columns)))
+    ax9.set_xticklabels(heat_matrix.columns, fontsize=7.5)
+    ax9.set_yticks(range(len(heat_matrix.index)))
+    wrapped_sub_heat = [textwrap.fill(str(s), 26) for s in heat_matrix.index]
+    ax9.set_yticklabels(wrapped_sub_heat, fontsize=7)
+    thresh_h = heat_matrix.values.max() * 0.55
+    for i in range(len(heat_matrix.index)):
+      for j in range(len(heat_matrix.columns)):
+        val_h = heat_matrix.values[i, j]
+        ax9.text(
+            j,
+            i,
+            str(val_h),
+            ha="center",
+            va="center",
+            color="white" if val_h > thresh_h else "black",
+            fontsize=7.5,
+            weight="bold",
+        )
+    plt.colorbar(im, ax=ax9, fraction=0.03, pad=0.04)
+
+    max_pos = np.unravel_index(
+        np.argmax(heat_matrix.values), heat_matrix.shape
+    )
+    max_sub_h = heat_matrix.index[max_pos[0]]
+    max_ver_h = heat_matrix.columns[max_pos[1]]
+    max_val_h = int(heat_matrix.values[max_pos])
+    g9_text = (
+        f"<b>Analisis & Insight Grafik 9:</b> Konsentrasi korelasi tertinggi"
+        f" tercatat pada <b>Versi {max_ver_h}</b> untuk kendala"
+        f" <i>{max_sub_h}</i> ({max_val_h:,} kasus). Pemetaan silang ini"
+        " membantu tim pengembang memprioritaskan perbaikan modul pasca rilis."
+    )
+  else:
+    ax9.text(
+        0.5,
+        0.5,
+        "Data versi spesifik tidak tersedia pada filter aktif",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#7F8C8D",
+    )
+    ax9.set_xticks([])
+    ax9.set_yticks([])
+    g9_text = (
+        "<b>Analisis & Insight Grafik 9:</b> Informasi versi rilis spesifik"
+        " tidak mencukupi untuk membentuk matriks korelasi pada filter saat ini."
+    )
+
   ax9.set_title(
       "Grafik 9: Heatmap Korelasi Versi Aplikasi vs Subklasifikasi Kendala",
       fontsize=10.5,
@@ -984,21 +1200,11 @@ def generate_full_pdf_report(df_source):
       color="#0A3960",
       pad=10,
   )
-  plt.colorbar(im, ax=ax9, fraction=0.03, pad=0.04)
   story.append(make_clean_image(fig9, 520, 160))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 9:</b> Versi 5.2.81 mencatat konsentrasi"
-          " keluhan terbesar pada gangguan pasokan listrik (246 kasus) dan"
-          " login/OTP (146 kasus). Data korelasi ini menegaskan pentingnya"
-          " pemantauan pasca rilis agar regu pengembang dapat segera"
-          " meluncurkan patch perbaikan modul terkait.",
-          insight_style,
-      )
-  )
+  story.append(Paragraph(g9_text, insight_style))
   story.append(Spacer(1, 6))
 
-  # Grafik 10 & 11: SLA Donut & Response Rate Bar (Side-by-side)
+  # Grafik 10 & 11: SLA Donut & Response Rate Bar
   fig10_11, (ax10, ax11) = plt.subplots(1, 2, figsize=(9.5, 2.5))
   sla_order = [
       "< 1 Jam",
@@ -1008,10 +1214,7 @@ def generate_full_pdf_report(df_source):
       "Belum Direspon",
   ]
   sla_data = (
-      df_source["SLA_Bucket"]
-      .value_counts()
-      .reindex(sla_order)
-      .fillna(0)
+      df_source["SLA_Bucket"].value_counts().reindex(sla_order).fillna(0)
   )
   colors_sla = ["#27AE60", "#2980B9", "#F39C12", "#E74C3C", "#7F8C8D"]
   wedges10, _, autotexts10 = ax10.pie(
@@ -1040,15 +1243,17 @@ def generate_full_pdf_report(df_source):
 
   resp_rate = df_source.groupby("Klasifikasi Utama").apply(
       lambda g: (
-          g["replyContent"].notna() & (g["replyContent"].str.strip() != "")
+          g["replyContent"].notna()
+          & (g["replyContent"].astype(str).str.strip() != "")
       ).mean()
       * 100
   )
-  wrapped_cat_resp = [textwrap.fill(c, 14) for c in resp_rate.index]
+  wrapped_cat_resp = [textwrap.fill(str(c), 14) for c in resp_rate.index]
+  bar_colors_11 = [color_dict.get(c, "#00A4E4") for c in resp_rate.index]
   bars11 = ax11.bar(
       range(len(resp_rate)),
       resp_rate.values,
-      color=["#95A5A6", "#00A4E4", "#F39C12"],
+      color=bar_colors_11,
       edgecolor="#0A3960",
       width=0.55,
   )
@@ -1074,17 +1279,29 @@ def generate_full_pdf_report(df_source):
         weight="bold",
     )
   story.append(make_clean_image(fig10_11, 520, 155))
-  story.append(
-      Paragraph(
-          "<b>Analisis & Insight Grafik 10 & 11:</b> Kinerja agen penanganan"
-          " keluhan sangat baik pada ranah kendala teknis dan proses bisnis"
-          " (mendekati 100% terjawab, dan 65%+ selesai dalam rentang waktu < 6"
-          " jam). Namun pada ulasan tanpa detail spesifik, respon agen baru"
-          " mencapai 48,3%, sehingga diperlukan auto-reply edukatif untuk"
-          " mempertahankan rating toko aplikasi.",
-          insight_style,
-      )
+
+  fast_sla_pct = (
+      (sla_data.get("< 1 Jam", 0) + sla_data.get("1 - 6 Jam", 0)) / tot * 100
+      if tot > 0
+      else 0.0
   )
+  if not resp_rate.empty:
+    low_resp_cat = resp_rate.idxmin()
+    low_resp_val = float(resp_rate.min())
+    g10_11_text = (
+        f"<b>Analisis & Insight Grafik 10 & 11:</b> Sebanyak {fast_sla_pct:.1f}%"
+        " ulasan berhasil ditanggapi dalam rentang waktu di bawah 6 jam."
+        " Sementara itu, kategori dengan tingkat respon terendah saat ini"
+        f" adalah <b>{low_resp_cat}</b> ({low_resp_val:.1f}%), sehingga"
+        " optimalisasi auto-reply edukatif diperlukan untuk menjaga konsistensi"
+        " pelayanan di toko aplikasi."
+    )
+  else:
+    g10_11_text = (
+        "<b>Analisis & Insight Grafik 10 & 11:</b> Distribusi waktu tanggap CS"
+        " ditampilkan sesuai filter aktif."
+    )
+  story.append(Paragraph(g10_11_text, insight_style))
 
   # ========================================================
   # HALAMAN 7: KESIMPULAN & ROADMAP REKOMENDASI MANAJEMEN
@@ -1095,25 +1312,36 @@ def generate_full_pdf_report(df_source):
           "Bagian VI: Kesimpulan & Roadmap Rekomendasi Strategis", h2_style
       )
   )
+
+  top_app_str = (
+      f"<i>{sub_app_desc.index[0]}</i> ({int(sub_app_desc.iloc[0]):,} ulasan)"
+      if not sub_app_desc.empty
+      else "modul otentikasi dan performa aplikasi"
+  )
+  top_biz_str = (
+      f"<i>{sub_biz_desc.index[0]}</i> ({int(sub_biz_desc.iloc[0]):,} ulasan)"
+      if not sub_biz_desc.empty
+      else "penanganan gangguan dan tindak lanjut aduan"
+  )
+
   story.append(
       Paragraph(
           "Berdasarkan analisis menyeluruh terhadap 5 metrik KPI dan 11"
           " visualisasi data di atas, berikut roadmap rekomendasi strategis bagi"
           " Divisi Manajemen Digital (DIV MDG):<br/><br/><b>1. Penguatan"
-          " Arsitektur Otentikasi & Redundansi OTP (Jangka"
-          " Pendek):</b><br/>Kendala nomor satu aplikasi adalah kegagalan login"
-          " dan pengiriman OTP (721 ulasan). Diperlukan implementasi multi-SMS"
-          " vendor gateway dan fallback otomatis ke WhatsApp OTP untuk menjamin"
-          " verifikasi akun tetap andal di jam sibuk.<br/><br/><b>2. Sistem"
-          " Validasi Dua Arah Status Pengaduan (Jangka Menengah):</b><br/>Untuk"
-          " meniadakan keluhan 'pengaduan ditutup sepihak' (221 ulasan), sistem"
-          " aplikasi wajib menerapkan <i>customer closure validation</i>,"
-          " yaitu tiket aduan hanya dapat ditutup jika pelanggan telah"
-          " mengonfirmasi penyelesaian lewat aplikasi.<br/><br/><b>3."
-          " Personalisasi Respon CS & ETA Penanganan Gangguan (Jangka"
-          " Panjang):</b><br/>Meningkatkan kepuasan pelanggan dengan mengurangi"
-          " template jawaban statis dan menyajikan estimasi waktu pemulihan"
-          " gangguan (ETA) serta nomor tiket tindak lanjut lapangan secara"
+          " Keandalan Modul Aplikasi Utama (Jangka Pendek):</b><br/>Prioritas"
+          f" perbaikan teknis difokuskan pada {top_app_str} sebagai penyumbang"
+          " keluhan aplikasi tertinggi, melalui peningkatan kapasitas layanan"
+          " pada jam beban puncak serta redundansi kanal verifikasi.<br/><br/>"
+          "<b>2. Validasi Transparansi Status Pengaduan (Jangka"
+          " Menengah):</b><br/>Untuk menekan keluhan pada kelompok"
+          f" {top_biz_str} dan pencegahan penutupan tiket sepihak, sistem perlu"
+          " menerapkan <i>customer closure validation</i> agar tiket aduan"
+          " berstatus selesai setelah mendapat konfirmasi"
+          " pelanggan.<br/><br/><b>3. Personalisasi Respon CS & Informasi ETA"
+          " Gangguan (Jangka Panjang):</b><br/>Meningkatkan kepuasan pelanggan"
+          " dengan mengurangi template jawaban statis serta menyajikan estimasi"
+          " waktu pemulihan (ETA) dan progres tindak lanjut lapangan secara"
           " transparan.",
           body_style,
       )
